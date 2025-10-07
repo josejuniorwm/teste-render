@@ -1,130 +1,104 @@
+// =========================================================================
+// jwtConsole.js (TOKEN PROXY SERVICE)
+// SUBSTITUA TODO O CONTEÚDO DO SEU ARQUIVO POR ESTE!
+// =========================================================================
+
 const docusign = require('docusign-esign');
-const signingViaEmail = require('../lib/eSignature/examples/signingViaEmail');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
+const bodyParser = require('body-parser');
 
-const jwtConfig = require('./jwtConfig.json');
-const demoDocsPath = path.resolve(__dirname, '../demo_documents');
-const doc2File = 'World_Wide_Corp_Battle_Plan_Trafalgar.docx';
-const doc3File = 'World_Wide_Corp_lorem.pdf';
-
-const readline = require('readline').createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
+// Importa as configurações (Integration Key, User GUID, Private Key Path)
+const jwtConfig = require('./jwtConfig.json'); 
 
 const SCOPES = [
-  'signature', 'impersonation'
+  'signature', 'impersonation' 
 ];
+const PORT = 3000; // Porta do seu novo serviço REST
 
-function getConsent() {
-  var urlScopes = SCOPES.join('+');
+const app = express();
+app.use(bodyParser.json()); // Suporta corpos de requisição JSON
 
-  // Construct consent URL
-  var redirectUri = 'https://developers.docusign.com/platform/auth/consent';
-  var consentUrl = `${jwtConfig.dsOauthServer}/oauth/auth?response_type=code&` +
-                      `scope=${urlScopes}&client_id=${jwtConfig.dsJWTClientId}&` +
-                      `redirect_uri=${redirectUri}`;
-
-  console.log('Open the following URL in your browser to grant consent to the application:');
-  console.log(consentUrl);
-  console.log('Consent granted? \n 1)Yes \n 2)No');
-  let consentGranted = prompt('');
-  if (consentGranted === '1'){
-    return true;
-  } else {
-    console.error('Please grant consent!');
-    process.exit();
-  }
-}
-
-async function authenticate(){
-  const jwtLifeSec = 10 * 60; // requested lifetime for the JWT is 10 min
+// =========================================================================
+// 1. FUNÇÃO DE AUTENTICAÇÃO (O Coração do JWT Grant)
+//    - Usa o SDK da DocuSign e a Chave Privada.
+// =========================================================================
+async function authenticate(clientId, userGuid) {
+  const jwtLifeSec = 10 * 60; // Duração do JWT (10 minutos)
   const dsApi = new docusign.ApiClient();
-  dsApi.setOAuthBasePath(jwtConfig.dsOauthServer.replace('https://', '')); // it should be domain only.
+  
+  // Define o caminho do OAuth Server (retirando o 'https://')
+  dsApi.setOAuthBasePath(jwtConfig.dsOauthServer.replace('https://', '')); 
+  
+  // Lê a Chave Privada de forma síncrona
   let rsaKey = fs.readFileSync(jwtConfig.privateKeyLocation);
 
   try {
-    const results = await dsApi.requestJWTUserToken(jwtConfig.dsJWTClientId,
-      jwtConfig.impersonatedUserGuid, SCOPES, rsaKey,
-      jwtLifeSec);
+    const results = await dsApi.requestJWTUserToken(
+      clientId,         
+      userGuid,         
+      SCOPES,           
+      rsaKey,           
+      jwtLifeSec        
+    );
+    
     const accessToken = results.body.access_token;
 
-    // get user info
+    // Obtém informações do usuário para descobrir o AccountId 
     const userInfoResults = await dsApi.getUserInfo(accessToken);
-
-    // use the default account
-    let userInfo = userInfoResults.accounts.find(account =>
-      account.isDefault === 'true');
+    let userInfo = userInfoResults.accounts.find(account => account.isDefault === 'true');
 
     return {
-      accessToken: results.body.access_token,
-      apiAccountId: userInfo.accountId,
-      basePath: `${userInfo.baseUri}/restapi`
+      accessToken: accessToken,
+      apiAccountId: userInfo.accountId
     };
+    
   } catch (e) {
-    console.log(e);
-    let body = e?.response?.body || e?.response?.data;
-    // Determine the source of the error
-    if (body) {
-        // The user needs to grant consent
-      if (body?.error === 'consent_required') {
-        if (getConsent()){ return authenticate(); };
-      } else {
-        // Consent has been granted. Show status code for DocuSign API error
-        this._debug_log(`\nAPI problem: Status code ${e.response.status}, message body:
-        ${JSON.stringify(body, null, 4)}\n\n`);
-      }
+    // Retorna o erro completo para ser logado e enviado ao Fluig
+    throw e;
+  }
+}
+
+// =========================================================================
+// 2. ENDPOINT REST PARA O FLUIG (/token-proxy)
+// =========================================================================
+app.post('/token-proxy', async (req, res) => {
+    try {
+        // Recebe os IDs do Fluig no corpo da requisição JSON
+        const { dsJWTClientId, impersonatedUserGuid } = req.body; 
+
+        if (!dsJWTClientId || !impersonatedUserGuid) {
+            return res.status(400).send({ 
+                error: 'invalid_request', 
+                error_description: 'Client ID e User GUID são obrigatórios no corpo da requisição.' 
+            });
+        }
+
+        // Chama a função de autenticação do DocuSign
+        let accountInfo = await authenticate(dsJWTClientId, impersonatedUserGuid);
+
+        // Retorna APENAS o Access Token e o AccountId para o Fluig
+        res.status(200).send({ 
+            access_token: accountInfo.accessToken,
+            account_id: accountInfo.apiAccountId
+        });
+        
+    } catch (e) {
+        // Trata erros de autenticação ou de servidor
+        let status = e.response?.status || 500;
+        let body = e.response?.body || { error_description: 'Erro interno ao processar token.' };
+        
+        // Retorna o erro para o Fluig
+        res.status(status).send(body);
     }
-  }
-}
-
-async function getArgs(apiAccountId, accessToken, basePath){
-  signerEmail = await prompt("Enter the signer's email address: ");
-  signerName = await prompt("Enter the signer's name: ");
-  ccEmail = await prompt("Enter the carbon copy's email address: ");
-  ccName = await prompt("Enter the carbon copy's name: ");
-
-  const envelopeArgs = {
-    signerEmail: signerEmail,
-    signerName: signerName,
-    ccEmail: ccEmail,
-    ccName: ccName,
-    status: 'sent',
-    doc2File: path.resolve(demoDocsPath, doc2File),
-    doc3File: path.resolve(demoDocsPath, doc3File)
-  };
-  const args = {
-    accessToken: accessToken,
-    basePath: basePath,
-    accountId: apiAccountId,
-    envelopeArgs: envelopeArgs
-  };
-
-  return args;
-}
-
-function prompt(prompt) {
-  return new Promise((resolve) => {
-    readline.question(prompt, (answer) => {
-      resolve(answer);
-    });
-  });
-}
+});
 
 
-async function main(){
-  try {
-    let accountInfo = await authenticate();
-    let args = await getArgs(accountInfo.apiAccountId, accountInfo.accessToken, accountInfo.basePath);
-    let envelopeId = await signingViaEmail.sendEnvelope(args);
-    console.log(envelopeId);
-  } catch (error) {
-    console.error('An error occurred:', error);
-  } finally {
-    readline.close();
-  }
-}
-
-main();
+// =========================================================================
+// 3. INICIAR O SERVIDOR
+// =========================================================================
+app.listen(PORT, '0.0.0.0', () => { // Usar '0.0.0.0' garante que ele escute em todos os IPs
+  console.log(`DocuSign Token Proxy Service rodando em http://75.119.141.135:${PORT}`);
+  console.log(`Endpoint para o Fluig: http://75.119.141.135:${PORT}/token-proxy`);
+});
