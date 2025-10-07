@@ -1,9 +1,0 @@
-{
-  "dsJWTClientId": "e68e4fca-d941-423e-baca-a521318bf5c4",
-  "dsClientId": "e68e4fca-d941-423e-baca-a521318bf5c4",
-  "impersonatedUserGuid": "8bbe50e4-ac9e-44dc-a990-3253a67ac353",
-  "privateKeyLocation":  "./private.key",
-  "dsOauthServer": "https://account-d.docusign.com",
-  "signerEmail": "jose.junior@uberdesk.com.br",
-  "signerName": "jose junior"
-}
