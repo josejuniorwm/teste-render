@@ -58,7 +58,11 @@ app.use(express.json());
 app.post('/token-proxy', async (req, res) => {
     // Extrai as credenciais do CORPO da requisição
     const { dsJWTClientId, impersonatedUserGuid, dsOauthServer, privateKey } = req.body;
-
+      
+    // --- ADICIONE ESTA LINHA PARA DEBUG ---
+    console.log(">>>>>> CHAVE PRIVADA RECEBIDA:", privateKey);
+    // ------------------------------------
+    
     // Validação básica
     if (!dsJWTClientId || !impersonatedUserGuid || !dsOauthServer || !privateKey) {
         return res.status(400).json({ error: 'Todos os campos de credenciais são obrigatórios no corpo da requisição.' });
