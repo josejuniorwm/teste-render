@@ -54,21 +54,24 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 // ALTERAÇÃO: Rota /token-proxy agora é GET e lê da req.query
-app.get('/token-proxy', async (req, res) => {
-    // Extrai as credenciais dos parâmetros da URL (query string)
-    const { dsJWTClientId, impersonatedUserGuid, dsOauthServer, privateKey } = req.query;
+// ALTERAÇÃO: Voltando a rota /token-proxy para POST para evitar problemas de encoding
+app.post('/token-proxy', async (req, res) => {
+    // Extrai as credenciais do CORPO da requisição
+    const { dsJWTClientId, impersonatedUserGuid, dsOauthServer, privateKey } = req.body;
 
+    // Validação básica
     if (!dsJWTClientId || !impersonatedUserGuid || !dsOauthServer || !privateKey) {
-        return res.status(400).json({ error: 'Todos os parâmetros de credenciais (dsJWTClientId, impersonatedUserGuid, dsOauthServer, privateKey) são obrigatórios na query string.' });
+        return res.status(400).json({ error: 'Todos os campos de credenciais são obrigatórios no corpo da requisição.' });
     }
 
     const incomingAppToken = req.header('AppToken');
-    if (incomingAppToken !== dsJWTClientId) {
+    if (incomingAppToken !== dsJWTClientId) { // A verificação continua contra o ID enviado no corpo
         console.warn('AppToken não autorizado ou incorreto:', incomingAppToken);
         return res.status(401).json({ error: 'Não Autorizado: AppToken Inválido.' });
     }
 
     try {
+        // Passa o objeto de credenciais para a função authenticate
         const accountInfo = await authenticate({ dsJWTClientId, impersonatedUserGuid, dsOauthServer, privateKey });
         
         if (accountInfo && accountInfo.accessToken) {
@@ -85,8 +88,6 @@ app.get('/token-proxy', async (req, res) => {
         res.status(500).json({ error: 'Erro interno do servidor.' });
     }
 });
-
-
 // Rota de download permanece como POST para segurança
 app.post('/download-document', async (req, res) => {
     // ... código sem alterações ...
