@@ -1,157 +1,160 @@
 const express = require('express');
 const docusign = require('docusign-esign');
-const fs = require('fs');
-const path = require('path');
 
-// --- INÍCIO DAS ALTERAÇÕES PARA O RENDER ---
-
-// As configurações agora virão das "Environment Variables"
-const jwtConfig = {
-    dsJWTClientId: process.env.DS_JWT_CLIENT_ID,
-    impersonatedUserGuid: process.env.DS_IMPERSONATED_USER_GUID,
-    dsOauthServer: process.env.DS_OAUTH_SERVER
-};
-
-// O Render permite salvar arquivos secretos. O caminho padrão é este:
-const privateKeyPath = '/etc/secrets/private_key';
-
-// --- FIM DAS ALTERAÇÕES PARA O RENDER ---
-
+// Escopos necessários para a autenticação JWT
 const SCOPES = [
-    'signature', 'impersonation'
+  'signature', 'impersonation'
 ];
 
-async function authenticate() {
-    const jwtLifeSec = 10 * 60;
-    const dsApi = new docusign.ApiClient();
-    dsApi.setOAuthBasePath(jwtConfig.dsOauthServer.replace('https://', ''));
+// --- 1. Lógica de Autenticação JWT (CORRIGIDA) ---
+async function authenticate(dsJWTClientId, impersonatedUserGuid, privateKey, dsOauthServer) {
+  const jwtLifeSec = 10 * 60; // Tempo de vida do JWT: 10 minutos
+  const dsApi = new docusign.ApiClient();
+  
+  // Define o caminho base para autenticação
+  dsApi.setOAuthBasePath(dsOauthServer.replace('https://', '')); 
+
+  try {
+    // ===================================================================
+    // CORREÇÃO: Garante que a chave privada esteja no formato correto
+    // Substitui literais \n por quebras de linha reais se necessário
+    // ===================================================================
+    let formattedPrivateKey = privateKey;
     
-    // Verifica se o arquivo da chave privada existe no caminho esperado
-    if (!fs.existsSync(privateKeyPath)) {
-        console.error('===================================================');
-        console.error('ERRO FATAL: Chave privada não encontrada em:', privateKeyPath);
-        console.error('Verifique se o "Secret File" foi criado corretamente no Render.');
-        console.error('===================================================');
-        return null;
+    // Se a chave vier com \n como string literal (ex: "\\n"), converte para quebra real
+    if (privateKey.includes('\\n')) {
+      formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
     }
     
-    let rsaKey = fs.readFileSync(privateKeyPath);
+    // Remove espaços extras no início/fim
+    formattedPrivateKey = formattedPrivateKey.trim();
+    
+    console.log('🔑 Primeira linha da chave:', formattedPrivateKey.split('\n')[0]);
+    
+    const results = await dsApi.requestJWTUserToken(
+      dsJWTClientId,
+      impersonatedUserGuid,
+      SCOPES,
+      formattedPrivateKey, // Passando a chave formatada
+      jwtLifeSec
+    );
+    const accessToken = results.body.access_token;
 
-    try {
-        const results = await dsApi.requestJWTUserToken(
-            jwtConfig.dsJWTClientId,
-            jwtConfig.impersonatedUserGuid,
-            SCOPES,
-            rsaKey,
-            jwtLifeSec
-        );
-        const accessToken = results.body.access_token;
-        const userInfoResults = await dsApi.getUserInfo(accessToken);
-        let userInfo = userInfoResults.accounts.find(account => account.isDefault === 'true');
+    // 2. Obtém as informações do usuário (para pegar o AccountId e BasePath)
+    const userInfoResults = await dsApi.getUserInfo(accessToken);
+    let userInfo = userInfoResults.accounts.find(account => account.isDefault === 'true');
 
-        return {
-            accessToken: accessToken,
-            apiAccountId: userInfo.accountId,
-            basePath: `${userInfo.baseUri}/restapi`
-        };
-    } catch (e) {
-        console.error('===================================================');
-        console.error('ERRO FATAL NA AUTENTICAÇÃO JWT:');
-        console.error(e);
-        console.error('Verifique se o Consentimento foi dado e se as variáveis de ambiente estão corretas.');
-        console.error('===================================================');
-        return null;
+    // Retorna as informações essenciais para o Fluig
+    return {
+      accessToken: accessToken,
+      apiAccountId: userInfo.accountId,
+      basePath: `${userInfo.baseUri}/restapi`
+    };
+
+  } catch (e) {
+    // Log detalhado de erros
+    console.error('===================================================');
+    console.error('ERRO FATAL NA AUTENTICAÇÃO JWT:');
+    console.error(e);
+    if (e.response && e.response.body) {
+      console.error('Detalhes do erro:', JSON.stringify(e.response.body, null, 2));
     }
+    console.error('Verifique se o Consentimento foi dado e se a Chave Privada é válida.');
+    console.error('===================================================');
+    throw e; // Lança o erro para ser capturado na rota
+  }
 }
 
-async function downloadDocumentAsBase64(authInfo, envelopeId) {
-    try {
-        const dsApiClient = new docusign.ApiClient();
-        dsApiClient.setBasePath(authInfo.basePath);
-        dsApiClient.addDefaultHeader('Authorization', 'Bearer ' + authInfo.accessToken);
 
-        const envelopesApi = new docusign.EnvelopesApi(dsApiClient);
-        const documentBytes = await envelopesApi.getDocument(authInfo.apiAccountId, envelopeId, '1');
-
-        // O SDK já retorna um Buffer, que é o que precisamos
-        const documentBase64 = documentBytes.toString('base64');
-        
-        console.log(`Documento do envelope ${envelopeId} convertido para Base64 com sucesso.`);
-        return documentBase64;
-
-    } catch (e) {
-        console.error(`===================================================`);
-        console.error(`ERRO AO BAIXAR O DOCUMENTO DO ENVELOPE ${envelopeId}:`);
-        console.error(e);
-        console.error(`===================================================`);
-        return null;
-    }
-}
-
+// --- 2. Configuração do Servidor Express ---
 const app = express();
-// O Render define a porta automaticamente através da variável de ambiente PORT
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Permite JSON maior (para a private key)
 
-app.get('/token-proxy', async (req, res) => {
-    const incomingAppToken = req.header('AppToken');
-    if (incomingAppToken !== jwtConfig.dsJWTClientId) {
-        console.warn('AppToken não autorizado ou incorreto:', incomingAppToken);
-        return res.status(401).json({ error: 'Não Autorizado: AppToken Inválido.' });
-    }
+// ROTA: POST /api/get-token (Recebe credenciais do Fluig)
+app.post('/api/get-token', async (req, res) => {
+    
     try {
-        const accountInfo = await authenticate();
-        if (accountInfo && accountInfo.accessToken) {
-            res.status(200).json({
-                accessToken: accountInfo.accessToken,
-                accountId: accountInfo.apiAccountId,
-                basePath: accountInfo.basePath
+        // Recebe as credenciais do body
+        const { 
+            dsJWTClientId, 
+            impersonatedUserGuid, 
+            privateKey, 
+            dsOauthServer
+        } = req.body;
+
+        // Validação básica dos campos obrigatórios
+        if (!dsJWTClientId || !impersonatedUserGuid || !privateKey || !dsOauthServer) {
+            return res.status(400).json({ 
+                error: 'Campos obrigatórios ausentes',
+                required: ['dsJWTClientId', 'impersonatedUserGuid', 'privateKey', 'dsOauthServer']
             });
-        } else {
-            res.status(500).json({ error: 'Falha na autenticação JWT. Verifique logs do servidor.' });
         }
+
+        console.log('🔐 Autenticando com DocuSign...');
+        
+        const accountInfo = await authenticate(
+            dsJWTClientId,
+            impersonatedUserGuid,
+            privateKey,
+            dsOauthServer
+        );
+        
+        console.log('✅ Autenticação bem-sucedida!');
+        
+        // Sucesso: Retorna o token e accountId
+        res.status(200).json({
+            success: true,
+            accessToken: accountInfo.accessToken,
+            accountId: accountInfo.apiAccountId,
+            basePath: accountInfo.basePath,
+            expiresIn: 3600 // 1 hora
+        });
+
     } catch (error) {
-        console.error('Erro interno não tratado na rota /token-proxy:', error);
-        res.status(500).json({ error: 'Erro interno do servidor.' });
+        console.error('❌ Erro na rota /api/get-token:', error.message);
+        
+        res.status(500).json({ 
+            success: false,
+            error: 'Falha na autenticação JWT',
+            message: error.message,
+            details: error.response?.body || null
+        });
     }
 });
 
-app.get('/download-document', async (req, res) => {
-    console.log('Recebida requisição para /download-document');
-    const incomingAppToken = req.header('AppToken');
-    if (incomingAppToken !== jwtConfig.dsJWTClientId) {
-        console.warn('AppToken não autorizado ou incorreto:', incomingAppToken);
-        return res.status(401).json({ error: 'Não Autorizado: AppToken Inválido.' });
-    }
-
-    const { envelopeId } = req.query;
-    if (!envelopeId) {
-        return res.status(400).json({ error: 'Parâmetro "envelopeId" é obrigatório.' });
-    }
-
-    try {
-        const authInfo = await authenticate();
-        if (!authInfo) {
-            return res.status(500).json({ error: 'Falha na autenticação JWT antes do download.' });
-        }
-        const base64Content = await downloadDocumentAsBase64(authInfo, envelopeId);
-        if (base64Content) {
-            res.status(200).json({
-                documentBase64: base64Content
-            });
-        } else {
-            res.status(500).json({ error: 'Falha ao baixar ou converter o documento. Verifique os logs.' });
-        }
-    } catch (error) {
-        console.error('Erro interno não tratado na rota /download-document:', error);
-        res.status(500).json({ error: 'Erro interno do servidor.' });
-    }
+// ROTA: GET /health (Para verificar se o servidor está rodando)
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'online',
+        service: 'DocuSign JWT Proxy',
+        timestamp: new Date().toISOString()
+    });
 });
 
-app.listen(PORT, () => {
+// ROTA: GET / (Informações básicas)
+app.get('/', (req, res) => {
+    res.status(200).json({
+        service: 'DocuSign JWT Authentication Proxy',
+        version: '2.0',
+        endpoints: {
+            getToken: 'POST /api/get-token',
+            health: 'GET /health'
+        },
+        documentation: 'Envie as credenciais via POST para /api/get-token'
+    });
+});
+
+// --- 3. Inicialização do Servidor ---
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`-------------------------------------------------`);
-    console.log(`🚀 Proxy JWT DocuSign iniciado com sucesso!`);
-    console.log(`Escutando na porta: ${PORT}`);
+    console.log(`🚀 Proxy JWT DocuSign v2.0 iniciado!`);
+    console.log(`📡 Escutando em: http://0.0.0.0:${PORT}`);
+    console.log(`🌐 Endpoint externo: http://23.94.4.170:${PORT}`);
+    console.log(`📋 Endpoints disponíveis:`);
+    console.log(`   - POST /api/get-token (Autenticação)`);
+    console.log(`   - GET  /health (Status do servidor)`);
+    console.log(`   - GET  / (Informações)`);
     console.log(`-------------------------------------------------`);
 });
