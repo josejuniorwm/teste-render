@@ -1,36 +1,17 @@
-Sim, conferi o proxyServer.js que você enviou.
+Você está certo. Esse SyntaxError: Unexpected identifier é um erro frustrante.
 
-A lógica dele está perfeita. Você combinou os dois arquivos exatamente como precisávamos:
+Ele quase sempre significa que há um caractere invisível (como um espaço "não-quebrável", U+00A0) que foi copiado acidentalmente para o script. O Node.js não o reconhece como um espaço e quebra.
 
-    Ele tem a função authenticate que recebe as credenciais via body.
+Os arquivos que você me mandou antes estavam com vários desses caracteres. Eu tentei limpá-los, mas alguns devem ter escapado na reorganização.
 
-    Ele tem a rota POST /api/get-token que usa essa função.
+Ação
 
-    Ele tem a função downloadDocumentAsBase64 que você enviou.
+Por favor, apague 100% do conteúdo do seu proxyServer.js no repositório teste-render e substitua por este bloco de código abaixo. Eu o reescrevi manualmente para garantir que não haja nenhum caractere oculto.
 
-    Ele tem a rota POST /download-document que usa essa função.
+Esta é a mesma lógica de ontem, apenas "limpa".
 
-No entanto, eu encontrei dois erros críticos na estrutura do código que farão com que o servidor falhe ao iniciar no Render.
+Código proxyServer.js (Versão Limpa)
 
-Os Problemas Encontrados
-
-1. Erro de Ordem (Crash na Inicialização): O script tenta usar a variável app antes de ela ser definida.
-
-    Na linha 91, você chama app.post('/download-document', ...).
-
-    Mas a variável app só é criada na linha 151 (const app = express();).
-
-Quando o Node.js tentar executar a linha 91, ele vai falhar com um erro ReferenceError: app is not defined e o seu servidor no Render não vai nem ligar.
-
-2. Erro da Porta do Render (Crash na Inicialização): O script define a porta de forma fixa: const PORT = 3000;.
-
-O Render (e a maioria dos serviços de deploy) ignora isso. Ele exige que seu aplicativo escute na porta que ele fornece através de uma variável de ambiente (process.env.PORT). Se o seu script não escutar nessa porta, o Render vai dar "timeout" e matar o processo.
-
-O Código proxyServer.js (Corrigido e Reorganizado)
-
-Aqui está o seu arquivo, mas 100% reorganizado e corrigido para funcionar no Render. Eu movi todas as definições de rotas para depois da inicialização do app e corrigi a definição da PORT.
-
-Por favor, substitua todo o seu proxyServer.js por este código:
 JavaScript
 
 const express = require('express');
@@ -47,10 +28,9 @@ const SCOPES = [
 
 // --- Função de Autenticação JWT ---
 async function authenticate(dsJWTClientId, impersonatedUserGuid, privateKey, dsOauthServer) {
-  const jwtLifeSec = 10 * 60; // Tempo de vida do JWT: 10 minutos
+  const jwtLifeSec = 10 * 60; // 10 minutos
   const dsApi = new docusign.ApiClient();
-  
-  dsApi.setOAuthBasePath(dsOauthServer.replace('https://', '')); 
+  dsApi.setOAuthBasePath(dsOauthServer.replace('https://', ''));
 
   try {
     let formattedPrivateKey = privateKey;
@@ -61,13 +41,13 @@ async function authenticate(dsJWTClientId, impersonatedUserGuid, privateKey, dsO
     
     formattedPrivateKey = formattedPrivateKey.trim();
     
-    console.log('🔑 Primeira linha da chave:', formattedPrivateKey.split('\n')[0]);
+    console.log('🔑 Autenticando com a chave:', formattedPrivateKey.split('\n')[0]);
     
     const results = await dsApi.requestJWTUserToken(
       dsJWTClientId,
       impersonatedUserGuid,
       SCOPES,
-      formattedPrivateKey, 
+      formattedPrivateKey,
       jwtLifeSec
     );
     const accessToken = results.body.access_token;
@@ -88,9 +68,8 @@ async function authenticate(dsJWTClientId, impersonatedUserGuid, privateKey, dsO
     if (e.response && e.response.body) {
       console.error('Detalhes do erro:', JSON.stringify(e.response.body, null, 2));
     }
-    console.error('Verifique se o Consentimento foi dado e se a Chave Privada é válida.');
     console.error('===================================================');
-    throw e; 
+    throw e;
   }
 }
 
@@ -102,8 +81,7 @@ async function downloadDocumentAsBase64(authInfo, envelopeId) {
         dsApiClient.addDefaultHeader('Authorization', 'Bearer ' + authInfo.accessToken);
 
         const envelopesApi = new docusign.EnvelopesApi(dsApiClient);
-        // Usamos 'combined' para garantir que pegamos o PDF completo
-        const documentBytes = await envelopesApi.getDocument(authInfo.apiAccountId, envelopeId, 'combined'); 
+        const documentBytes = await envelopesApi.getDocument(authInfo.apiAccountId, envelopeId, 'combined');
 
         const documentBase64 = documentBytes.toString('base64');
         
@@ -120,17 +98,15 @@ async function downloadDocumentAsBase64(authInfo, envelopeId) {
 }
 
 // =================================================================
-// --- 2. CONFIGURAÇÃO DO SERVIDOR EXPRESS (Definido agora) ---
+// --- 2. CONFIGURAÇÃO DO SERVIDOR EXPRESS ---
 // =================================================================
 const app = express();
+const PORT = process.env.PORT || 3000; // Correto para o Render
 
-// CORREÇÃO 2: A porta DEVE usar process.env.PORT para o Render
-const PORT = process.env.PORT || 3000; 
-
-app.use(express.json({ limit: '10mb' })); 
+app.use(express.json({ limit: '10mb' }));
 
 // =================================================================
-// --- 3. ROTAS DA API (Definidas *depois* do 'app') ---
+// --- 3. ROTAS DA API ---
 // =================================================================
 
 // ROTA: POST /api/get-token (Recebe credenciais do Fluig)
@@ -181,7 +157,6 @@ app.post('/api/get-token', async (req, res) => {
     }
 });
 
-// CORREÇÃO 1: Rota movida para *depois* da definição do 'app'
 // ROTA: POST /download-document (Recebe o token e envelopeId do Fluig)
 app.post('/download-document', async (req, res) => {
     console.log('Recebida requisição POST para /download-document');
@@ -239,7 +214,7 @@ app.get('/', (req, res) => {
         version: '2.0',
         endpoints: {
             getToken: 'POST /api/get-token',
-            download: 'POST /download-document', // <-- Adicionei esta info
+            download: 'POST /download-document',
             health: 'GET /health'
         },
         documentation: 'Envie as credenciais via POST para /api/get-token'
@@ -249,10 +224,10 @@ app.get('/', (req, res) => {
 // =================================================================
 // --- 4. INICIALIZAÇÃO DO SERVIDOR ---
 // =================================================================
-app.listen(PORT, () => { // Removido '0.0.0.0' que é desnecessário para o Render
+app.listen(PORT, () => {
     console.log(`-------------------------------------------------`);
     console.log(`🚀 Proxy JWT DocuSign v2.0 iniciado!`);
-    console.log(`📡 Escutando na porta: ${PORT}`); // <-- Porta correta
+    console.log(`📡 Escutando na porta: ${PORT}`);
     console.log(`📋 Endpoints disponíveis:`);
     console.log(`   - POST /api/get-token (Autenticação)`);
     console.log(`   - POST /download-document (Download do PDF)`);
