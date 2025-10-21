@@ -1,19 +1,3 @@
-Você está certo. Esse SyntaxError: Unexpected identifier é um erro frustrante.
-
-Ele quase sempre significa que há um caractere invisível (como um espaço "não-quebrável", U+00A0) que foi copiado acidentalmente para o script. O Node.js não o reconhece como um espaço e quebra.
-
-Os arquivos que você me mandou antes estavam com vários desses caracteres. Eu tentei limpá-los, mas alguns devem ter escapado na reorganização.
-
-Ação
-
-Por favor, apague 100% do conteúdo do seu proxyServer.js no repositório teste-render e substitua por este bloco de código abaixo. Eu o reescrevi manualmente para garantir que não haja nenhum caractere oculto.
-
-Esta é a mesma lógica de ontem, apenas "limpa".
-
-Código proxyServer.js (Versão Limpa)
-
-JavaScript
-
 const express = require('express');
 const docusign = require('docusign-esign');
 
