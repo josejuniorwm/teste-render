@@ -64,6 +64,33 @@ async function authenticate(dsJWTClientId, impersonatedUserGuid, privateKey, dsO
     throw e; // Lança o erro para ser capturado na rota
   }
 }
+
+// =================================================================
+async function downloadDocumentAsBase64(authInfo, envelopeId) {
+    try {
+        const dsApiClient = new docusign.ApiClient();
+        dsApiClient.setBasePath(authInfo.basePath);
+        dsApiClient.addDefaultHeader('Authorization', 'Bearer ' + authInfo.accessToken);
+
+        const envelopesApi = new docusign.EnvelopesApi(dsApiClient);
+        // Usamos 'combined' para garantir que pegamos o PDF completo
+        const documentBytes = await envelopesApi.getDocument(authInfo.apiAccountId, envelopeId, 'combined'); 
+
+        // O SDK já retorna um Buffer, que é o que precisamos
+        const documentBase64 = documentBytes.toString('base64');
+        
+        console.log(`Documento do envelope ${envelopeId} convertido para Base64 com sucesso.`);
+        return documentBase64;
+
+    } catch (e) {
+        console.error(`===================================================`);
+        console.error(`ERRO AO BAIXAR O DOCUMENTO DO ENVELOPE ${envelopeId}:`);
+        console.error(e);
+        console.error(`===================================================`);
+        return null;
+    }
+}
+
 // ROTA: POST /download-document (Recebe o token e envelopeId do Fluig)
 app.post('/download-document', async (req, res) => {
     console.log('Recebida requisição POST para /download-document');
