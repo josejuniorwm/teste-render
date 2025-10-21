@@ -64,7 +64,48 @@ async function authenticate(dsJWTClientId, impersonatedUserGuid, privateKey, dsO
     throw e; // Lança o erro para ser capturado na rota
   }
 }
+// ROTA: POST /download-document (Recebe o token e envelopeId do Fluig)
+app.post('/download-document', async (req, res) => {
+    console.log('Recebida requisição POST para /download-document');
+    
+    try {
+        // Recebe o token (que o Fluig já tem) e o envelopeId
+        const { authInfo, envelopeId } = req.body;
 
+        if (!authInfo || !authInfo.accessToken || !authInfo.basePath || !authInfo.apiAccountId || !envelopeId) {
+            return res.status(400).json({ 
+                error: 'Campos obrigatórios ausentes',
+                required: ['authInfo (com accessToken, basePath, apiAccountId)', 'envelopeId']
+            });
+        }
+        
+        console.log(`Solicitando download do envelope ${envelopeId}...`);
+
+        // Chama a função de download
+        const base64Content = await downloadDocumentAsBase64(authInfo, envelopeId);
+        
+        if (base64Content) {
+            console.log('✅ Documento convertido. Enviando Base64 para o Fluig.');
+            res.status(200).json({
+                success: true,
+                documentBase64: base64Content
+            });
+        } else {
+            res.status(500).json({ 
+                success: false,
+                error: 'Falha ao baixar ou converter o documento. Verifique os logs do proxy.' 
+            });
+        }
+
+    } catch (error) {
+        console.error('❌ Erro na rota /download-document:', error.message);
+        res.status(500).json({ 
+            success: false,
+            error: 'Erro interno do servidor no proxy.',
+            message: error.message
+        });
+    }
+});
 
 // --- 2. Configuração do Servidor Express ---
 const app = express();
